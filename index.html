@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>3D 天气</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    background: #e9eaec;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif;
+    display: flex; justify-content: center; align-items: center;
+    overflow: hidden;
+  }
+  #app {
+    position: relative;
+    width: min(430px, 100vw);
+    height: min(880px, 100dvh);
+    background: #ffffff;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 30px 80px rgba(0,0,0,.18);
+  }
+  @media (max-width: 430px) { #app { width: 100vw; height: 100dvh; box-shadow: none; } }
+
+  /* ---------- header ---------- */
+  header {
+    position: relative; z-index: 5;
+    padding: 18px 20px 4px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  #cityBtn {
+    display: flex; align-items: center; gap: 6px;
+    background: none; border: 0; cursor: pointer;
+    font-size: 20px; font-weight: 700; color: #111;
+    font-family: inherit;
+  }
+  #cityBtn svg { display: block; }
+  #dateText { font-size: 13px; color: #9a9a9a; font-weight: 500; }
+
+  /* ---------- stage ---------- */
+  #stage { position: relative; flex: 1; min-height: 0; }
+  #stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #bigLabel {
+    position: absolute; z-index: 2; left: 50%; bottom: 5%;
+    transform: translateX(-50%);
+    font-size: 22px; font-weight: 800; color: #141414;
+    letter-spacing: 6px; text-indent: 6px;
+    pointer-events: none;
+    transition: opacity .25s;
+  }
+  #hint {
+    position: absolute; z-index: 2; left: 50%; top: 50%;
+    transform: translate(-50%,-50%);
+    color: #b9b9b9; font-size: 14px; letter-spacing: 2px;
+    pointer-events: none; transition: opacity .3s;
+  }
+
+  /* ---------- week strip ---------- */
+  #week {
+    position: relative; z-index: 5;
+    display: flex;
+    padding: 6px 8px calc(14px + env(safe-area-inset-bottom));
+  }
+  .day {
+    flex: 1; min-width: 0;
+    display: flex; flex-direction: column; align-items: center; gap: 5px;
+    padding: 9px 0 8px; border: 0; background: none; cursor: pointer;
+    border-radius: 14px;
+    font-family: inherit;
+    transition: background .2s, transform .15s;
+  }
+  .day:active { transform: scale(.94); }
+  .day .dname { font-size: 12px; color: #b3b3b3; font-weight: 600; }
+  .day .dicon { width: 26px; height: 22px; opacity: .55; transition: opacity .2s; }
+  .day .dicon svg { width: 100%; height: 100%; display: block; }
+  .day .dmax { font-size: 15px; font-weight: 800; color: #c0c0c0; line-height: 1.1; }
+  .day .dmin { font-size: 13px; font-weight: 600; color: #d4d4d4; line-height: 1.1; }
+  .day.sel { background: #f4f4f5; }
+  .day.sel .dname { color: #111; }
+  .day.sel .dicon { opacity: 1; }
+  .day.sel .dmax { color: #111; }
+  .day.sel .dmin { color: #a9a9a9; }
+
+  /* ---------- city sheet ---------- */
+  #mask {
+    position: absolute; inset: 0; z-index: 19;
+    background: rgba(0,0,0,.25);
+    opacity: 0; pointer-events: none; transition: opacity .25s;
+  }
+  #citySheet {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 20;
+    background: #fff; border-radius: 24px 24px 0 0;
+    padding: 18px 18px calc(24px + env(safe-area-inset-bottom));
+    transform: translateY(105%);
+    transition: transform .32s cubic-bezier(.32,.9,.3,1);
+    box-shadow: 0 -10px 40px rgba(0,0,0,.12);
+  }
+  body.sheet-open #mask { opacity: 1; pointer-events: auto; }
+  body.sheet-open #citySheet { transform: translateY(0); }
+  #citySheet h3 { font-size: 16px; color: #111; margin-bottom: 14px; font-weight: 800; }
+  #cityGrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .cityItem {
+    border: 0; background: #f4f4f5; border-radius: 12px;
+    padding: 11px 0; font-size: 14px; font-weight: 600; color: #333;
+    cursor: pointer; font-family: inherit;
+    transition: background .15s, color .15s, transform .12s;
+  }
+  .cityItem:active { transform: scale(.95); }
+  .cityItem.cur { background: #141414; color: #fff; }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="app">
+  <header>
+    <button id="cityBtn">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+        <path d="M12 21s7-5.1 7-11a7 7 0 1 0-14 0c0 5.9 7 11 7 11z" stroke="#111" stroke-width="2.2" stroke-linejoin="round"/>
+        <circle cx="12" cy="10" r="2.4" fill="#111"/>
+      </svg>
+      <span id="cityName">北京</span>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+        <path d="M6 9l6 6 6-6" stroke="#111" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+    <div id="dateText"></div>
+  </header>
+
+  <div id="stage">
+    <div id="hint">加载中…</div>
+    <div id="bigLabel"></div>
+  </div>
+
+  <div id="week"></div>
+
+  <div id="mask"></div>
+  <div id="citySheet">
+    <h3>选择城市</h3>
+    <div id="cityGrid"></div>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { FontLoader } from 'three/addons/loaders/FontLoader.js';
+import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
+
+/* ================= 数据 ================= */
+
+const CITIES = [
+  { name:'北京',   lat:39.904, lon:116.407 },
+  { name:'深圳',   lat:22.543, lon:114.058 },
+  { name:'赣州',   lat:25.831, lon:114.933 },
+  { name:'上海',   lat:31.230, lon:121.474 },
+  { name:'广州',   lat:23.129, lon:113.264 },
+  { name:'杭州',   lat:30.274, lon:120.155 },
+  { name:'成都',   lat:30.572, lon:104.067 },
+  { name:'重庆',   lat:29.563, lon:106.551 },
+  { name:'武汉',   lat:30.593, lon:114.305 },
+  { name:'西安',   lat:34.341, lon:108.940 },
+  { name:'南京',   lat:32.060, lon:118.797 },
+  { name:'哈尔滨', lat:45.803, lon:126.535 },
+  { name:'拉萨',   lat:29.652, lon:91.172 },
+  { name:'香港',   lat:22.319, lon:114.169 },
+  { name:'东京',   lat:35.676, lon:139.650 },
+  { name:'纽约',   lat:40.713, lon:-74.006 },
+];
+
+// num: 3D 温度数字颜色；css: 下方文字标签颜色 —— 都取自该天气的主题色
+const TYPE_META = {
+  sunny:   { label:'晴',   num: 0xf57f00, css: '#e07000' },
+  partly:  { label:'多云', num: 0xd98a26, css: '#c47a16' },
+  cloudy:  { label:'阴',   num: 0x4a4f57, css: '#4a4f57' },
+  fog:     { label:'雾',   num: 0x8d949d, css: '#80868f' },
+  rain:    { label:'雨',   num: 0x1e6fd6, css: '#1e6fd6' },
+  snow:    { label:'雪',   num: 0x7fa6d9, css: '#5e8fc7' },
+  thunder: { label:'雷雨', num: 0x5036c9, css: '#5036c9' },
+};
+
+function codeToType(c){
+  if (c === 0) return 'sunny';
+  if (c === 1 || c === 2) return 'partly';
+  if (c === 3) return 'cloudy';
+  if (c === 45 || c === 48) return 'fog';
+  if ((c >= 51 && c <= 67) || (c >= 80 && c <= 82)) return 'rain';
+  if ((c >= 71 && c <= 77) || c === 85 || c === 86) return 'snow';
+  if (c >= 95) return 'thunder';
+  return 'cloudy';
+}
+
+const WEEK_CN = ['周日','周一','周二','周三','周四','周五','周六'];
+
+const state = {
+  city: CITIES[0],
+  days: [],        // {date, type, max, min}
+  current: null,   // 实时温度
+  selected: 0,
+};
+
+async function fetchWeather(city){
+  const url = 'https://api.open-meteo.com/v1/forecast'
+    + `?latitude=${city.lat}&longitude=${city.lon}`
+    + '&daily=weather_code,temperature_2m_max,temperature_2m_min'
+    + '&current=temperature_2m,weather_code'
+    + '&timezone=auto&forecast_days=7';
+  // 旧浏览器没有 AbortSignal.timeout，降级为不带超时的请求
+  const opts = (typeof AbortSignal !== 'undefined' && AbortSignal.timeout)
+    ? { signal: AbortSignal.timeout(8000) } : {};
+  const res = await fetch(url, opts);
+  if (!res.ok) throw new Error('http ' + res.status);
+  const j = await res.json();
+  const days = j.daily.time.map((t, i) => ({
+    date: new Date(t + 'T12:00:00'),
+    type: codeToType(j.daily.weather_code[i]),
+    max: Math.round(j.daily.temperature_2m_max[i]),
+    min: Math.round(j.daily.temperature_2m_min[i]),
+  }));
+  return { days, current: Math.round(j.current.temperature_2m), currentType: codeToType(j.current.weather_code) };
+}
+
+// 离线兜底：按城市名生成稳定的模拟数据
+function mockWeather(city){
+  let seed = 0;
+  for (const ch of city.name) seed = (seed * 131 + ch.charCodeAt(0)) % 100000;
+  const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+  const pool = ['rain','sunny','partly','cloudy','thunder','rain','snow','fog','partly','sunny'];
+  const base = 18 + Math.floor(rnd() * 14);
+  const days = [];
+  const today = new Date();
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(today); d.setDate(today.getDate() + i);
+    const max = base + Math.floor(rnd() * 6) - 2;
+    days.push({
+      date: d,
+      type: pool[Math.floor(rnd() * pool.length)],
+      max,
+      min: max - 3 - Math.floor(rnd() * 4),
+    });
+  }
+  return { days, current: days[0].min + 1, currentType: days[0].type };
+}
+
+/* ================= 小图标（底部 7 天） ================= */
+
+function iconSVG(type){
+  const cloud = (fill='#1b1b1b') =>
+    `<g fill="${fill}"><circle cx="9.4" cy="8.6" r="3.6"/><circle cx="14.6" cy="7.8" r="4.2"/><circle cx="18.6" cy="10" r="3"/><rect x="6" y="8.6" width="15.4" height="4.6" rx="2.3"/></g>`;
+  const sun = (cx=12, cy=10, r=4.4, c='#ff9a1f') => {
+    let rays = '';
+    for (let i = 0; i < 8; i++) {
+      const a = i / 8 * Math.PI * 2;
+      const x1 = cx + Math.cos(a) * (r + 1.2), y1 = cy + Math.sin(a) * (r + 1.2);
+      const x2 = cx + Math.cos(a) * (r + 3.2), y2 = cy + Math.sin(a) * (r + 3.2);
+      rays += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${c}" stroke-width="1.6" stroke-linecap="round"/>`;
+    }
+    return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${c}"/>${rays}`;
+  };
+  const wrap = inner => `<svg viewBox="0 0 26 22" xmlns="http://www.w3.org/2000/svg">${inner}</svg>`;
+  switch (type) {
+    case 'sunny':   return wrap(sun(13, 11, 5));
+    case 'partly':  return wrap(sun(18, 6, 3.2) + cloud());
+    case 'cloudy':  return wrap(cloud('#555'));
+    case 'fog':     return wrap(cloud('#9a9a9a') +
+      `<rect x="6" y="15.4" width="13" height="1.7" rx=".85" fill="#c2c2c2"/><rect x="9" y="18.4" width="9" height="1.7" rx=".85" fill="#d4d4d4"/>`);
+    case 'rain':    return wrap(cloud() +
+      `<rect x="9" y="14.6" width="1.7" height="4.6" rx=".85" fill="#3fa9ff"/><rect x="13" y="15.4" width="1.7" height="5.4" rx=".85" fill="#3fa9ff"/><rect x="17" y="14.6" width="1.7" height="3.8" rx=".85" fill="#3fa9ff"/>`);
+    case 'snow':    return wrap(cloud() +
+      `<circle cx="10" cy="16.6" r="1.25" fill="#9db7d6"/><circle cx="14" cy="18.6" r="1.25" fill="#9db7d6"/><circle cx="18" cy="16.2" r="1.25" fill="#9db7d6"/>`);
+    case 'thunder': return wrap(cloud() +
+      `<path d="M13.6 13.2 L10.8 17.6 L13 17.6 L11.6 21.4 L16 16.4 L13.7 16.4 L15.4 13.2 Z" fill="#ffd23f"/>`);
+    default:        return wrap(cloud());
+  }
+}
+
+/* ================= Three.js 场景 ================= */
+
+const stage = document.getElementById('stage');
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+stage.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#ffffff');
+
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
+camera.position.set(0, 0.6, 12.5);
+camera.lookAt(0, 0.4, 0);
+
+// 灯光：白色主光 + 背后红色轮廓光（参考图里云和数字的红色描边）+ 微弱蓝色补光
+scene.add(new THREE.HemisphereLight(0xffffff, 0xdfe3ea, 1.0));
+const keyLight = new THREE.DirectionalLight(0xffffff, 1.7);
+keyLight.position.set(5, 9, 7);
+scene.add(keyLight);
+const rimRed = new THREE.PointLight(0xff6a3d, 40, 0, 2);
+rimRed.position.set(2.6, 6.8, -2.6);
+scene.add(rimRed);
+const fillBlue = new THREE.PointLight(0x4a7dff, 18, 0, 2);
+fillBlue.position.set(-5, -1, 3);
+scene.add(fillBlue);
+const flashLight = new THREE.PointLight(0xcfe0ff, 0, 0, 1.6); // 雷电闪光
+flashLight.position.set(0, 3, 3);
+scene.add(flashLight);
+
+const world = new THREE.Group(); // 视差容器
+scene.add(world);
+
+// 背景装饰：右侧浅灰球（参考图）
+{
+  const deco = new THREE.Mesh(
+    new THREE.SphereGeometry(0.55, 32, 32),
+    new THREE.MeshStandardMaterial({ color: 0xe7e7e7, roughness: 0.85 })
+  );
+  deco.position.set(3.4, 0.2, -3);
+  world.add(deco);
+}
+
+const darkMat  = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.38, metalness: 0.15 });
+// 各天气的云配色：雨=蓝灰、雷=深蓝、雪=冰灰、多云=近白、阴=中灰+浅灰、雾=雾灰
+const cloudMats = {
+  rain:    new THREE.MeshStandardMaterial({ color: 0x66788f, roughness: 0.5,  metalness: 0.05 }),
+  thunder: new THREE.MeshStandardMaterial({ color: 0x3c4258, roughness: 0.5,  metalness: 0.1 }),
+  snow:    new THREE.MeshStandardMaterial({ color: 0xc9d6e4, roughness: 0.6 }),
+  partly:  new THREE.MeshStandardMaterial({ color: 0xeef1f5, roughness: 0.65 }),
+  cloudyA: new THREE.MeshStandardMaterial({ color: 0x8d97a3, roughness: 0.55 }),
+  cloudyB: new THREE.MeshStandardMaterial({ color: 0xc6cdd6, roughness: 0.65 }),
+  fog:     new THREE.MeshStandardMaterial({ color: 0xaab1ba, roughness: 0.7 }),
+};
+const numberMat = new THREE.MeshStandardMaterial({ color: 0x0e0e0e, roughness: 0.3, metalness: 0.25 });
+const dropMat  = new THREE.MeshStandardMaterial({ color: 0x5fb0ff, roughness: 0.3, emissive: 0x2a76d8, emissiveIntensity: 0.3 });
+const snowMat  = new THREE.MeshStandardMaterial({ color: 0xcfe0f2, roughness: 0.5, emissive: 0x9db7d6, emissiveIntensity: 0.25 });
+const sunMat   = new THREE.MeshStandardMaterial({ color: 0xff9a1f, roughness: 0.3, metalness: 0.1, emissive: 0xff6a00, emissiveIntensity: 0.25 });
+const boltMat  = new THREE.MeshBasicMaterial({ color: 0xffd23f });
+const fogMat   = new THREE.MeshStandardMaterial({ color: 0xc9cdd3, roughness: 0.9, transparent: true, opacity: 0.85 });
+
+function makeCloud({ scale = 1, x = 0, y = 3.0, mat = darkMat } = {}){
+  const g = new THREE.Group();
+  const blobs = [
+    [0, 0, 0, 1.18], [1.12, -0.12, 0.2, 0.88], [-1.18, -0.16, 0.1, 0.82],
+    [0.55, 0.6, -0.2, 0.78], [-0.62, 0.52, 0.18, 0.72], [1.95, -0.3, 0, 0.55],
+    [-1.95, -0.34, 0.12, 0.5], [0.1, -0.42, 0.62, 0.8], [-0.5, -0.08, -0.6, 0.7],
+    [1.3, 0.35, 0.3, 0.55],
+  ];
+  for (const [bx, by, bz, r] of blobs) {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(r, 36, 36), mat);
+    m.position.set(bx, by, bz);
+    g.add(m);
+  }
+  // 旁边漂浮的小碎球
+  const dots = [[2.9, -0.5, -0.4, 0.2], [-2.85, 0.25, 0.2, 0.16], [2.4, 0.7, -0.6, 0.12]];
+  for (const [bx, by, bz, r] of dots) {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 20), mat);
+    m.position.set(bx, by, bz);
+    g.add(m);
+  }
+  g.position.set(x, y, 0);
+  g.scale.setScalar(scale);
+  return g;
+}
+
+// 雨滴收拢在云的正下方：细长、均匀、带一点倾斜，不铺满全屏
+function makeRainDrops(count = 46){
+  const g = new THREE.Group();
+  const drops = [];
+  const resetX = () => (Math.random() - 0.5) * 4.4;
+  for (let i = 0; i < count; i++) {
+    const len = 0.22 + Math.random() * 0.22;
+    const m = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, len, 3, 8), dropMat);
+    m.position.set(resetX(), 2.2 - Math.random() * 5.4, (Math.random() - 0.5) * 1.2);
+    m.rotation.z = 0.05;
+    g.add(m);
+    drops.push({ m, speed: 3.2 + Math.random() * 2.2 });
+  }
+  return {
+    group: g,
+    update(dt){
+      for (const d of drops) {
+        d.m.position.y -= d.speed * dt;
+        if (d.m.position.y < -3.3) {
+          d.m.position.y = 1.9 + Math.random() * 0.9;
+          d.m.position.x = resetX();
+        }
+      }
+    }
+  };
+}
+
+function makeSnowFlakes(count = 70){
+  const g = new THREE.Group();
+  const flakes = [];
+  for (let i = 0; i < count; i++) {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(0.05 + Math.random() * 0.07, 12, 12), snowMat);
+    m.position.set((Math.random() - 0.5) * 5.6, -4 + Math.random() * 8.2, (Math.random() - 0.5) * 2.4);
+    g.add(m);
+    flakes.push({ m, speed: 0.7 + Math.random() * 0.8, phase: Math.random() * Math.PI * 2, baseX: m.position.x });
+  }
+  return {
+    group: g,
+    update(dt, t){
+      for (const f of flakes) {
+        f.m.position.y -= f.speed * dt;
+        f.m.position.x = f.baseX + Math.sin(t * 1.4 + f.phase) * 0.35;
+        if (f.m.position.y < -4.6) {
+          f.m.position.y = 3.3 + Math.random() * 1.4;
+          f.baseX = (Math.random() - 0.5) * 5.6;
+        }
+      }
+    }
+  };
+}
+
+function makeSun({ x = 0, y = 3.0, scale = 1 } = {}){
+  const g = new THREE.Group();
+  const core = new THREE.Mesh(new THREE.SphereGeometry(1.45, 48, 48), sunMat);
+  g.add(core);
+  const rays = new THREE.Group();
+  const rayCount = 10;
+  for (let i = 0; i < rayCount; i++) {
+    const a = i / rayCount * Math.PI * 2;
+    const len = i % 2 === 0 ? 0.62 : 0.4;
+    const ray = new THREE.Mesh(new THREE.CapsuleGeometry(0.085, len, 3, 10), sunMat);
+    const r = 2.35;
+    ray.position.set(Math.cos(a) * r, Math.sin(a) * r, 0);
+    ray.rotation.z = a + Math.PI / 2;
+    rays.add(ray);
+  }
+  g.add(rays);
+  g.position.set(x, y, 0);
+  g.scale.setScalar(scale);
+  return { group: g, rays, core };
+}
+
+function makeBolt(){
+  const s = new THREE.Shape();
+  s.moveTo(0.15, 0);
+  s.lineTo(-0.42, -1.05);
+  s.lineTo(-0.08, -1.05);
+  s.lineTo(-0.58, -2.15);
+  s.lineTo(0.55, -0.85);
+  s.lineTo(0.18, -0.85);
+  s.lineTo(0.62, 0);
+  s.closePath();
+  const geo = new THREE.ExtrudeGeometry(s, { depth: 0.22, bevelEnabled: true, bevelThickness: 0.03, bevelSize: 0.03, bevelSegments: 2 });
+  geo.center();
+  return new THREE.Mesh(geo, boltMat);
+}
+
+/* ----- 各天气场景构建器：返回 { group, update(dt,t) } ----- */
+
+const builders = {
+  rain(){
+    const g = new THREE.Group();
+    const cloud = makeCloud({ y: 3.0, mat: cloudMats.rain });
+    const rain = makeRainDrops(46);
+    g.add(cloud, rain.group);
+    return { group: g, update(dt, t){
+      cloud.position.y = 3.0 + Math.sin(t * 0.9) * 0.12;
+      cloud.rotation.y = Math.sin(t * 0.35) * 0.07;
+      rain.update(dt);
+    }};
+  },
+  thunder(){
+    const g = new THREE.Group();
+    const cloud = makeCloud({ y: 3.0, mat: cloudMats.thunder });
+    const rain = makeRainDrops(32);
+    const bolt = makeBolt();
+    bolt.position.set(1.15, 1.35, 0.6);
+    bolt.visible = false;
+    g.add(cloud, rain.group, bolt);
+    let nextFlash = 1.2, flashT = 0;
+    return { group: g, update(dt, t){
+      cloud.position.y = 3.0 + Math.sin(t * 1.1) * 0.1;
+      rain.update(dt);
+      nextFlash -= dt;
+      if (nextFlash <= 0) { flashT = 0.45; nextFlash = 1.8 + Math.random() * 2.6; bolt.position.x = (Math.random() > 0.5 ? 1 : -1) * (0.8 + Math.random() * 0.7); }
+      if (flashT > 0) {
+        flashT -= dt;
+        const k = Math.max(0, flashT / 0.45);
+        bolt.visible = flashT > 0.08;
+        bolt.scale.setScalar(0.85 + k * 0.3);
+        flashLight.intensity = (Math.sin(flashT * 55) * 0.5 + 0.5) * 140 * k;
+      } else { bolt.visible = false; flashLight.intensity = 0; }
+    }};
+  },
+  snow(){
+    const g = new THREE.Group();
+    const cloud = makeCloud({ y: 3.0, mat: cloudMats.snow });
+    const snow = makeSnowFlakes(70);
+    g.add(cloud, snow.group);
+    return { group: g, update(dt, t){
+      cloud.position.y = 3.0 + Math.sin(t * 0.7) * 0.12;
+      cloud.rotation.y = Math.sin(t * 0.3) * 0.06;
+      snow.update(dt, t);
+    }};
+  },
+  cloudy(){
+    const g = new THREE.Group();
+    const c1 = makeCloud({ y: 3.1, mat: cloudMats.cloudyA });
+    const c2 = makeCloud({ y: 1.4, x: -1.6, scale: 0.55, mat: cloudMats.cloudyB });
+    g.add(c1, c2);
+    return { group: g, update(dt, t){
+      c1.position.y = 3.1 + Math.sin(t * 0.8) * 0.12;
+      c2.position.x = -1.6 + Math.sin(t * 0.5) * 0.3;
+      c2.position.y = 1.4 + Math.cos(t * 0.6) * 0.08;
+    }};
+  },
+  partly(){
+    const g = new THREE.Group();
+    const sun = makeSun({ x: 1.5, y: 3.9, scale: 0.62 });
+    const cloud = makeCloud({ x: -0.5, y: 2.7, scale: 0.92, mat: cloudMats.partly });
+    g.add(sun.group, cloud);
+    return { group: g, update(dt, t){
+      sun.rays.rotation.z = t * 0.4;
+      sun.group.position.y = 3.9 + Math.sin(t * 0.9) * 0.08;
+      cloud.position.y = 2.7 + Math.sin(t * 0.7 + 1) * 0.12;
+      cloud.position.x = -0.5 + Math.sin(t * 0.4) * 0.15;
+    }};
+  },
+  sunny(){
+    const g = new THREE.Group();
+    const sun = makeSun({ y: 3.1 });
+    // 周围漂浮的小暖色球
+    const dots = [];
+    for (const [x, y, r] of [[2.9, 2.1, 0.16], [-2.7, 3.9, 0.13], [-2.2, 1.7, 0.1]]) {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 16), sunMat);
+      m.position.set(x, y, -0.5);
+      g.add(m); dots.push({ m, baseY: y, ph: Math.random() * 6 });
+    }
+    g.add(sun.group);
+    return { group: g, update(dt, t){
+      sun.rays.rotation.z = t * 0.45;
+      sun.core.rotation.y = t * 0.3;
+      sun.group.position.y = 3.1 + Math.sin(t * 0.8) * 0.1;
+      for (const d of dots) d.m.position.y = d.baseY + Math.sin(t + d.ph) * 0.15;
+    }};
+  },
+  fog(){
+    const g = new THREE.Group();
+    const cloud = makeCloud({ y: 3.2, scale: 0.85, mat: cloudMats.fog });
+    const bands = [];
+    for (let i = 0; i < 4; i++) {
+      const len = 1.6 + Math.random() * 1.6;
+      const band = new THREE.Mesh(new THREE.CapsuleGeometry(0.17, len, 4, 12), fogMat);
+      band.rotation.z = Math.PI / 2;
+      band.position.set((Math.random() - 0.5) * 2.5, 1.9 - i * 0.62, 0.8);
+      g.add(band);
+      bands.push({ m: band, baseX: band.position.x, sp: 0.3 + Math.random() * 0.4, ph: Math.random() * 6 });
+    }
+    g.add(cloud);
+    return { group: g, update(dt, t){
+      cloud.position.y = 3.2 + Math.sin(t * 0.6) * 0.1;
+      for (const b of bands) b.m.position.x = b.baseX + Math.sin(t * b.sp + b.ph) * 0.7;
+    }};
+  },
+};
+
+/* ----- 3D 温度数字 ----- */
+
+let font = null;
+let numberMesh = null;
+
+function setNumber(temp, type){
+  if (!font) return;
+  if (numberMesh) {
+    world.remove(numberMesh);
+    numberMesh.geometry.dispose();
+  }
+  const meta = TYPE_META[type] || TYPE_META.cloudy;
+  numberMat.color.set(meta.num);
+  numberMat.emissive.set(meta.num);
+  numberMat.emissiveIntensity = 0.12;
+  const geo = new TextGeometry(String(Math.round(temp)) + '°', {
+    font, size: 2.45, height: 0.95, curveSegments: 10,
+    bevelEnabled: true, bevelThickness: 0.06, bevelSize: 0.05, bevelSegments: 3,
+  });
+  geo.center();
+  numberMesh = new THREE.Mesh(geo, numberMat);
+  numberMesh.position.set(0, -1.15, 0);
+  numberMesh.rotation.x = -0.05;
+  numberMesh.scale.setScalar(0.001);
+  world.add(numberMesh);
+}
+
+/* ----- 天气场景切换 ----- */
+
+let fx = null;
+
+function disposeGroup(g){
+  g.traverse(o => { if (o.isMesh) o.geometry.dispose(); });
+}
+
+function setWeatherScene(type){
+  if (fx) {
+    world.remove(fx.group);
+    disposeGroup(fx.group);
+    flashLight.intensity = 0;
+  }
+  fx = (builders[type] || builders.cloudy)();
+  fx.group.scale.setScalar(0.001);
+  world.add(fx.group);
+}
+
+/* ----- 渲染循环 ----- */
+
+const clock = new THREE.Clock();
+let targetRotY = 0, targetRotX = 0;
+
+stage.addEventListener('pointermove', e => {
+  const r = stage.getBoundingClientRect();
+  targetRotY = ((e.clientX - r.left) / r.width - 0.5) * 0.28;
+  targetRotX = ((e.clientY - r.top) / r.height - 0.5) * 0.12;
+});
+
+function resize(){
+  const w = stage.clientWidth, h = stage.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(stage);
+resize();
+
+function tick(){
+  requestAnimationFrame(tick);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.elapsedTime;
+  const ease = 1 - Math.pow(0.0001, dt);
+
+  world.rotation.y += (targetRotY - world.rotation.y) * ease * 0.6;
+  world.rotation.x += (targetRotX - world.rotation.x) * ease * 0.6;
+
+  if (fx) {
+    fx.update(dt, t);
+    const s = fx.group.scale.x;
+    fx.group.scale.setScalar(s + (1 - s) * Math.min(1, dt * 7));
+  }
+  if (numberMesh) {
+    const s = numberMesh.scale.x;
+    numberMesh.scale.setScalar(s + (1 - s) * Math.min(1, dt * 7));
+    numberMesh.rotation.y = Math.sin(t * 0.5) * 0.06;
+  }
+  renderer.render(scene, camera);
+}
+tick();
+
+/* ================= UI ================= */
+
+const elCityName = document.getElementById('cityName');
+const elDate = document.getElementById('dateText');
+const elBigLabel = document.getElementById('bigLabel');
+
+// 标签切换：先淡出再换字淡入，避免新旧文字叠影
+let labelTimer = null;
+function setBigLabel(text, color){
+  clearTimeout(labelTimer);
+  elBigLabel.style.opacity = 0;
+  labelTimer = setTimeout(() => {
+    elBigLabel.textContent = text;
+    elBigLabel.style.color = color;
+    elBigLabel.style.opacity = 1;
+  }, 200);
+}
+const elHint = document.getElementById('hint');
+const elWeek = document.getElementById('week');
+
+function dayName(d, i){
+  return i === 0 ? '今天' : WEEK_CN[d.getDay()];
+}
+
+function renderWeek(){
+  elWeek.innerHTML = '';
+  state.days.forEach((d, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'day' + (i === state.selected ? ' sel' : '');
+    // 今天的小图标与上方实时天气保持一致
+    const iconType = (i === 0 && state.currentType) ? state.currentType : d.type;
+    btn.innerHTML =
+      `<div class="dname">${dayName(d.date, i)}</div>` +
+      `<div class="dicon">${iconSVG(iconType)}</div>` +
+      `<div class="dmax">${d.max}</div>` +
+      `<div class="dmin">${d.min}</div>`;
+    btn.addEventListener('click', () => selectDay(i));
+    elWeek.appendChild(btn);
+  });
+}
+
+function selectDay(i){
+  state.selected = i;
+  const d = state.days[i];
+  // 今天展示实时温度与实时天气，其余天展示最高温与预报天气
+  const temp = (i === 0 && state.current != null) ? state.current : d.max;
+  const type = (i === 0 && state.currentType) ? state.currentType : d.type;
+  setNumber(temp, type);
+  setWeatherScene(type);
+  setBigLabel(TYPE_META[type].label, TYPE_META[type].css);
+  elDate.textContent = `${d.date.getMonth() + 1}月${d.date.getDate()}日 · ${dayName(d.date, i)}`;
+  renderWeek();
+}
+
+async function loadCity(city){
+  state.city = city;
+  elCityName.textContent = city.name;
+  elHint.textContent = '加载中…';
+  elHint.style.opacity = 1;
+  elBigLabel.style.opacity = 0;
+  let data;
+  try {
+    data = await fetchWeather(city);
+  } catch (e) {
+    console.warn('天气接口不可用，使用模拟数据', e);
+    data = mockWeather(city);
+  }
+  state.days = data.days;
+  state.current = data.current;
+  state.currentType = data.currentType;
+  elHint.style.opacity = 0;
+  selectDay(0);
+}
+
+/* ----- 城市选择面板 ----- */
+
+const mask = document.getElementById('mask');
+const cityGrid = document.getElementById('cityGrid');
+
+function renderCityGrid(){
+  cityGrid.innerHTML = '';
+  for (const c of CITIES) {
+    const b = document.createElement('button');
+    b.className = 'cityItem' + (c.name === state.city.name ? ' cur' : '');
+    b.textContent = c.name;
+    b.addEventListener('click', () => {
+      document.body.classList.remove('sheet-open');
+      if (c.name !== state.city.name) loadCity(c);
+    });
+    cityGrid.appendChild(b);
+  }
+}
+
+document.getElementById('cityBtn').addEventListener('click', () => {
+  renderCityGrid();
+  document.body.classList.add('sheet-open');
+});
+mask.addEventListener('click', () => document.body.classList.remove('sheet-open'));
+
+/* ================= 启动 ================= */
+
+new FontLoader().load(
+  'https://unpkg.com/three@0.160.0/examples/fonts/helvetiker_bold.typeface.json',
+  f => {
+    font = f;
+    loadCity(state.city);
+  },
+  undefined,
+  () => { elHint.textContent = '字体加载失败，请检查网络'; }
+);
+</script>
+</body>
+</html>
