@@ -112,8 +112,7 @@
 </style>
 <script type="importmap">
 { "imports": {
-    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    "three": "./weather3d/lib/three.module.js"
 } }
 </script>
 </head>
@@ -149,8 +148,8 @@
 
 <script type="module">
 import * as THREE from 'three';
-import { FontLoader } from 'three/addons/loaders/FontLoader.js';
-import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
+import { FontLoader } from './weather3d/lib/FontLoader.js';
+import { TextGeometry } from './weather3d/lib/TextGeometry.js';
 
 /* ================= 数据 ================= */
 
@@ -753,7 +752,7 @@ mask.addEventListener('click', () => document.body.classList.remove('sheet-open'
 /* ================= 启动 ================= */
 
 new FontLoader().load(
-  'https://unpkg.com/three@0.160.0/examples/fonts/helvetiker_bold.typeface.json',
+  './weather3d/lib/helvetiker_bold.typeface.json',
   f => {
     font = f;
     loadCity(state.city);
